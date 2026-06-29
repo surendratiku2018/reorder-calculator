@@ -1,0 +1,13 @@
+sku,lead_time_in_sheet,lead_time_window_usage,this_week_usage,last_year_week_usage,expected_baseline_W,expected_yoy_R,expected_new_reorder_point_U,note
+36-0023,10,114,54,102,131,-48,83,normal: negative YoY reduces baseline
+35-0051,28,212,39,42,244,-3,241,normal: longer lead time (28-day window)
+35-0089,10,152,60,80,175,-20,155,normal
+58-3708,20,10,0,14,12,-14,12,ROUNDING + FALLBACK: 10*1.15=11.5 rounds to 12; W+R = -2 (not >0) so U falls back to W=12
+35-0009,30,1692.201,276,246.739,1946,29.261,1975.261,FRACTIONAL: W is rounded (1692.201*1.15=1946.03->1946) but U is NOT rounded (1946+29.261=1975.261)
+99-5545,10,1,0,0,1,0,1,minimal nonzero baseline
+99-5101,Static,0,12,8,0,4,4,STATIC item: lead time is the word 'Static' so window usage=0 and W=0; U driven by R only
+35-0017,Static,0,29,34,0,-5,0,"STATIC + FALLBACK: W=0, W+R=-5 (not >0), U falls back to W=0"
+99-0000,Static,0,14,10,0,4,4,static item
+35-0072,Static,0,1,9,0,-8,0,static + fallback
+02-6402,Static,0,0,0,0,0,0,all-zero baseline case
+16-2400,Static,0,1,1,0,0,0,"COMPUTED (not an override): the sheet shows a hand-typed 24 over a broken formula (OFFSET #REF!). The rebuilt tool has no broken refs, so this row computes normally; with current inputs (Static lead time, empty window, YoY 0) the correct value is 0. Do NOT carry the 24 over."
