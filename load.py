@@ -68,54 +68,70 @@ def _create_date(value):
 
 
 def _block_dates(labels, start_year=2025):
-    """Map each daily header to a REAL ISO date. Handles every header style seen
-    in the wild:
+    """Return ISO dates for the daily-usage headers.
 
-      * real Excel date cells (datetime/date objects) — used as-is, their own
-        year included (this is what "Start fresh" uploads built from a full
-        export or with formatted date headers contain);
-      * text with a year, e.g. '01-Jul-2025' — parsed fully;
-      * text without a year, e.g. '10-Feb' (the original workbook) — the year
-        starts at ``start_year`` and advances when the month wraps (Dec -> Jan).
+    Supports both layouts used by the master workbooks:
+      * real Excel dates/datetimes (for example 2025-07-01), and
+      * legacy text labels without a year (for example 10-Feb).
 
-    Duplicate labels (a data-entry artifact) map to the same date and are summed
-    by the caller."""
-    dates, year, prev = [], start_year, None
+    For text-only labels, ``start_year`` is used for the first date and the year
+    advances when the month wraps from December to January.
+    """
+    dates, year, prev = [], int(start_year), None
     for h in labels:
         if h is None or str(h).strip() == "":
             dates.append(None)
             continue
-        # real date cell -> trust it completely
+
+        # Newer master files store actual Excel dates in the header.  The old
+        # implementation converted these to strings and tried to parse them as
+        # "DD-Mon", so every daily date became None and recalculation used zero
+        # usage.  Preserve the real date directly.
         if isinstance(h, (_dt.datetime, _dt.date)):
             d = h.date() if isinstance(h, _dt.datetime) else h
             dates.append(d.isoformat())
-            prev, year = d.month, d.year
+            prev = d.month
+            year = d.year
             continue
-        parts = str(h).strip().replace(".", "").split("-")
+
+        text = str(h).strip().replace(".", "")
+        parsed = None
+
+        # ISO/date-like text exported by some spreadsheet tools.
+        try:
+            parsed = _dt.datetime.fromisoformat(text).date()
+        except ValueError:
+            try:
+                parsed = _dt.date.fromisoformat(text)
+            except ValueError:
+                parsed = None
+        if parsed is not None:
+            dates.append(parsed.isoformat())
+            prev = parsed.month
+            year = parsed.year
+            continue
+
+        # Legacy "10-Feb" header with no year.
+        parts = text.split("-")
         try:
             day, month = int(parts[0]), _MONTHS[parts[1][:3].lower()]
         except (ValueError, KeyError, IndexError):
             dates.append(None)
             continue
-        if len(parts) >= 3 and parts[2].strip().isdigit():   # '01-Jul-2025' style
-            year = int(parts[2])
-            prev = month
-        else:                                                # '10-Feb' style
-            if prev is not None and month < prev:
-                year += 1
-            prev = month
+        if prev is not None and month < prev:
+            year += 1
+        prev = month
         dates.append(_dt.date(year, month, day).isoformat())
     return dates
 
 
-def migrate(xlsx_path, db_path=db.DEFAULT_DB_PATH, sheet=None, start_year=2025):
+def migrate(xlsx_path, db_path=db.DEFAULT_DB_PATH, sheet="Sheet1", start_year=2025):
     """Load a master spreadsheet into a fresh database. ``start_year`` is the year
-    that column X (the first daily-usage column) falls in — only needed when the
-    daily headers are year-less text like '10-Feb'; real date headers carry their
-    own year. ``sheet`` defaults to 'Sheet1' when present, else the first sheet."""
+    that column X (the first daily-usage column) falls in; the anchor — the real
+    date of column X — is then derived from that column's label. This lets
+    "Start fresh" load a newer dataset (e.g. a June-2026 master) with correct
+    dates without hard-coding anything."""
     wb = openpyxl.load_workbook(xlsx_path, data_only=True, read_only=True)
-    if sheet is None:
-        sheet = "Sheet1" if "Sheet1" in wb.sheetnames else wb.sheetnames[0]
     ws = wb[sheet]
     rows = list(ws.iter_rows(min_row=1, max_row=LAST_ROW, values_only=True))
     block_dates = _block_dates(rows[0][COL_DAILY_START - 1:], start_year)

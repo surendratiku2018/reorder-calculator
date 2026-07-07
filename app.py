@@ -296,28 +296,28 @@ def page_startfresh(c):
         st.error(f"Couldn't read that as a master spreadsheet (expects the original layout): {e}")
         return
 
-    if isinstance(first_label, (_dt.datetime, _dt.date)):
-        # Real date cells: the file carries its own dates — nothing to ask.
-        x_date = first_label.date() if isinstance(first_label, _dt.datetime) else first_label
-        start_year = x_date.year
-        st.write(f"Detected **{n_products}** products. The first daily column (column X) is "
-                 f"**{x_date.isoformat()}** — the file's date headers will be used as-is.")
-    else:
-        st.write(f"Detected **{n_products}** products. The first daily column (column X) is labelled **{first_label}**.")
-        try:
-            parts = str(first_label).replace(".", "").split("-")
-            x_day, x_month = int(parts[0]), load._MONTHS[parts[1][:3].lower()]
-            has_year = len(parts) >= 3 and parts[2].strip().isdigit()
-        except Exception:
-            x_day = x_month = has_year = None
-        if has_year:
-            start_year = int(str(first_label).replace(".", "").split("-")[2])
-            st.caption(f"→ Column X will be **{_dt.date(start_year, x_month, x_day).isoformat()}** (year read from the header).")
+    st.write(f"Detected **{n_products}** products. The first daily column (column X) is labelled **{first_label}**.")
+    try:
+        if isinstance(first_label, (_dt.datetime, _dt.date)):
+            first_date = first_label.date() if isinstance(first_label, _dt.datetime) else first_label
+            x_day, x_month = first_date.day, first_date.month
+            guess_year = first_date.year
         else:
-            start_year = st.number_input("Year that column X falls in", value=_dt.date.today().year - 1, step=1, format="%d",
-                                         help="These daily headers carry no year. The daily block then spans ~one year from column X.")
-            if x_month:
-                st.caption(f"→ Column X will be **{_dt.date(int(start_year), x_month, x_day).isoformat()}**, and the block runs ~one year forward from there.")
+            label_text = str(first_label).strip().replace(".", "")
+            try:
+                first_date = _dt.datetime.fromisoformat(label_text).date()
+                x_day, x_month, guess_year = first_date.day, first_date.month, first_date.year
+            except ValueError:
+                parts = label_text.split("-")
+                x_day, x_month = int(parts[0]), load._MONTHS[parts[1][:3].lower()]
+                guess_year = _dt.date.today().year - 1
+    except Exception:
+        x_day = x_month = None
+        guess_year = _dt.date.today().year
+    start_year = st.number_input("Year that column X falls in", value=guess_year, step=1, format="%d",
+                                 help="The daily headers carry no year. The daily block then spans ~one year from column X.")
+    if x_month:
+        st.caption(f"→ Column X will be **{_dt.date(int(start_year), x_month, x_day).isoformat()}**, and the block runs ~one year forward from there.")
 
     if st.checkbox("I understand this overwrites all current data") and st.button("Replace data & rebuild", type="primary"):
         master_path = os.path.join(db.PROJECT_DIR, "data", "source_workbook.xlsx")
