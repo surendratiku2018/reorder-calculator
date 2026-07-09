@@ -259,13 +259,29 @@ def page_export(c):
                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
     st.divider()
-    st.caption("CSV (for tooling/import; may re-coerce if opened directly in a spreadsheet):")
+    st.markdown("**Excel-safe exports (recommended):**")
     col3, col4 = st.columns(2)
-    col3.download_button("⤓ Results (CSV)", exports.results_csv(c, run_date),
-                         file_name=f"reorder_results_{run_date}.csv", mime="text/csv")
-    col4.download_button("⤓ Finale subset (CSV)", exports.results_csv(c, run_date, subset=True),
-                         file_name=f"finale_upload_{run_date}.csv", mime="text/csv")
-    st.caption("Finale subset = Product id + New Reorder Point. Send me your exact Finale column layout and I'll match it.")
+    col3.download_button("⤓ Results", xlsx_bytes(exports.results_xlsx),
+                         file_name=f"reorder_results_{run_date}.xlsx",
+                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    col4.download_button("⤓ Finale Subset", xlsx_bytes(exports.finale_subset_xlsx),
+                         file_name=f"finale_upload_{run_date}.xlsx",
+                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.caption(
+        "Product IDs/SKUs are stored as real text cells in both files, so Excel will not convert values "
+        "such as 01-2500 into dates."
+    )
+
+    with st.expander("CSV exports (for system import only)"):
+        st.warning(
+            "CSV files do not store column data types. If opened directly in Excel, Excel may convert SKU values "
+            "into dates. Use the Excel-safe buttons above for viewing or editing."
+        )
+        col5, col6 = st.columns(2)
+        col5.download_button("⤓ Results (CSV)", exports.results_csv(c, run_date),
+                             file_name=f"reorder_results_{run_date}.csv", mime="text/csv")
+        col6.download_button("⤓ Finale subset (CSV)", exports.results_csv(c, run_date, subset=True),
+                             file_name=f"finale_upload_{run_date}.csv", mime="text/csv")
 
 
 def page_startfresh(c):

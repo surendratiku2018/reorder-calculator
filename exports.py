@@ -149,6 +149,41 @@ def full_data_xlsx(conn, path, run_date=None):
     return path
 
 
+
+def finale_subset_xlsx(conn, path, run_date=None):
+    """Excel-safe Finale subset.
+
+    The Product id column is explicitly stored as a string and formatted as
+    Text, preventing Excel from converting SKUs such as 01-2500 into dates.
+    """
+    run_date = run_date or db.latest_run_date(conn)
+    rows = _summary_rows(conn, run_date)
+
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Finale Subset"
+    ws.append(["Product id", "ReorderPoint"])
+
+    for d in rows:
+        sku = "" if d["sku"] is None else str(d["sku"])
+        value = d.get("new_reorder_point")
+        if isinstance(value, float) and value == int(value):
+            value = int(value)
+
+        ws.append([sku, value])
+        sku_cell = ws.cell(row=ws.max_row, column=1)
+        sku_cell.value = sku
+        sku_cell.data_type = "s"
+        sku_cell.number_format = "@"
+
+    _style_header(ws, 2)
+    ws.freeze_panes = "A2"
+    ws.column_dimensions["A"].width = 20
+    ws.column_dimensions["B"].width = 18
+    wb.save(path)
+    return path
+
+
 def results_csv(conn, run_date=None, subset=False):
     run_date = run_date or db.latest_run_date(conn)
     rows = _summary_rows(conn, run_date)
