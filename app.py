@@ -264,7 +264,7 @@ def page_export(c):
     col3.download_button("⤓ Results", xlsx_bytes(exports.results_xlsx),
                          file_name=f"reorder_results_{run_date}.xlsx",
                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    col4.download_button("⤓ Finale Subset", xlsx_bytes(exports.finale_subset_xlsx),
+    col4.download_button("⤓ Finale Subset", xlsx_bytes(getattr(exports, 'finale_subset_xlsx', exports.results_xlsx)),
                          file_name=f"finale_upload_{run_date}.xlsx",
                          mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     st.caption(
