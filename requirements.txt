@@ -1,5 +1,7 @@
-# Reorder Calculator — runtime dependencies (built/tested on these versions)
-streamlit==1.58.0     # the UI (Technical Spec §7)
-openpyxl==3.1.5       # reads the original .xlsx during the one-time migration
-pandas==3.0.3         # dataframe display in the dashboard
-pytest==9.1.1         # acceptance + parity tests
+streamlit
+pandas
+openpyxl
+numpy
+xlsxwriter
+python-dateutil
+plotly
