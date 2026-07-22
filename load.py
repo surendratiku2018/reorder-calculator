@@ -27,7 +27,7 @@ COL_LWEEK = range(4, 11)       # D..J  this year
 COL_LYEAR = range(11, 18)      # K..Q  last year
 COL_SKU, COL_DESC, COL_LEAD = 19, 20, 22
 COL_DAILY_START = 24           # X
-FIRST_ROW, LAST_ROW = 2, 680
+FIRST_ROW = 2
 
 ANCHOR = "2025-02-10"          # column X = 10-Feb-2025
 _MONTHS = {m: i + 1 for i, m in enumerate(
@@ -133,7 +133,7 @@ def migrate(xlsx_path, db_path=db.DEFAULT_DB_PATH, sheet="Sheet1", start_year=20
     dates without hard-coding anything."""
     wb = openpyxl.load_workbook(xlsx_path, data_only=True, read_only=True)
     ws = wb[sheet]
-    rows = list(ws.iter_rows(min_row=1, max_row=LAST_ROW, values_only=True))
+    rows = list(ws.iter_rows(min_row=1, max_row=ws.max_row, values_only=True))
     block_dates = _block_dates(rows[0][COL_DAILY_START - 1:], start_year)
     anchor_iso = next((d for d in block_dates if d), f"{start_year}-01-01")  # column X date
 
