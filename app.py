@@ -451,7 +451,7 @@ def main():
             st.code("python load_cli.py data/source_workbook.xlsx", language="bash")
             return
         with st.spinner("Setting up the database from the source workbook (first load only)…"):
-            c.close()
+            c.close()https://github.com/surendratiku2018/reorder-calculator/blob/main/app.py
             import load
             load.migrate(xlsx)
             c = conn()
