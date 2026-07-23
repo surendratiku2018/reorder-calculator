@@ -343,10 +343,42 @@ def page_startfresh(c):
             c.close()
             rep = load.migrate(master_path, start_year=int(start_year))
             nc = conn()
-            calc.run_calculation(nc, _dt.date.today().isoformat())
+            computed = calc.run_calculation(nc, _dt.date.today().isoformat())
             anchor = db.get_params(nc)["lead_window_anchor"]
-        st.success(f"Started fresh: loaded {rep['products']} products; column X = {anchor}. Recalculated.")
-        st.rerun()
+
+        st.success(
+            f"Started fresh: loaded **{rep.get('products', 0)}** products; "
+            f"column X = **{anchor}**; recalculated **{computed}** products."
+        )
+
+        st.subheader("Import summary")
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Excel rows", rep.get("total_rows", 0))
+        m2.metric("Unique SKUs imported", rep.get("unique_skus", rep.get("products", 0)))
+        m3.metric("Duplicate rows skipped", rep.get("duplicates", 0))
+        m4.metric("Blank SKU rows skipped", rep.get("blank_rows", 0))
+
+        duplicate_skus = rep.get("duplicate_skus", [])
+        if duplicate_skus:
+            st.warning(f"{len(duplicate_skus)} duplicate SKU row(s) were skipped.")
+
+            duplicate_rows = []
+            for item in duplicate_skus:
+                if isinstance(item, dict):
+                    duplicate_rows.append({
+                        "Excel row": item.get("row", ""),
+                        "SKU": item.get("sku", ""),
+                    })
+                else:
+                    duplicate_rows.append({"Excel row": "", "SKU": str(item)})
+
+            st.dataframe(
+                pd.DataFrame(duplicate_rows),
+                width="stretch",
+                hide_index=True,
+            )
+
+        st.info("Import completed. Use the sidebar to review the dashboard or run another calculation.")
 
 
 # ---------- shell ----------
