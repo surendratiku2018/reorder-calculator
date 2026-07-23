@@ -29,10 +29,10 @@ st.set_page_config(page_title="Reorder Calculator", page_icon="◧", layout="wid
 
 # ---------- optional password gate ----------
 def _expected_password() -> str:
-    """Read the optional password from the Railway environment only.
+    """Read the optional app password only from the environment.
 
-    Railway environment variables are used for the optional password,
-    so no local secrets file is required.
+    Set APP_PASSWORD in Railway Variables. Leaving it unset disables the
+    password gate without triggering Streamlit's missing-secrets warning.
     """
     return os.environ.get("APP_PASSWORD", "").strip()
 
@@ -96,52 +96,6 @@ def dashboard_rows(c, run_date):
     return out
 
 
-# ---------- safe table rendering ----------
-
-def render_html_table(frame: pd.DataFrame, max_height: int = 560) -> None:
-    """Render a DataFrame without Streamlit/PyArrow conversion.
-
-    Railway was repeatedly crashing inside pyarrow while st.dataframe()
-    converted mixed Pandas columns. HTML rendering avoids that native-code
-    conversion completely while preserving the existing search/filter logic.
-    """
-    safe = frame.copy()
-    safe = safe.where(pd.notna(safe), "")
-    table_html = safe.to_html(index=False, escape=True, border=0, classes="safe-data-table")
-    st.markdown(
-        f"""
-        <style>
-        .safe-table-wrap {{
-            max-height: {int(max_height)}px;
-            overflow: auto;
-            border: 1px solid rgba(49, 51, 63, 0.2);
-            border-radius: 0.5rem;
-        }}
-        table.safe-data-table {{
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 0.9rem;
-        }}
-        table.safe-data-table th,
-        table.safe-data-table td {{
-            padding: 0.45rem 0.6rem;
-            border-bottom: 1px solid rgba(49, 51, 63, 0.12);
-            text-align: left;
-            white-space: nowrap;
-        }}
-        table.safe-data-table th {{
-            position: sticky;
-            top: 0;
-            background: var(--background-color, white);
-            z-index: 1;
-        }}
-        </style>
-        <div class="safe-table-wrap">{table_html}</div>
-        """,
-        unsafe_allow_html=True,
-    )
-
-
 # ---------- pages ----------
 
 def page_dashboard(c):
@@ -175,30 +129,21 @@ def page_dashboard(c):
         view = view[view["calculates"]]
 
     display = view[["sku", "description", "supplier", "category", "lead_time_display",
-                    "baseline_reorder_point", "yoy_difference", "new_reorder_point"]].copy()
-
-    # Give Arrow a stable schema. SQLite/Pandas can otherwise leave object
-    # columns containing a mixture of None, strings, ints and floats. Some
-    # PyArrow builds can crash while inferring those mixed object columns.
-    text_columns = ["sku", "description", "supplier", "category", "lead_time_display"]
-    number_columns = ["baseline_reorder_point", "yoy_difference", "new_reorder_point"]
-    for column in text_columns:
-        display[column] = display[column].fillna("").astype("string")
-    for column in number_columns:
-        display[column] = pd.to_numeric(display[column], errors="coerce").astype("float64")
-
+                    "baseline_reorder_point", "yoy_difference", "new_reorder_point"]]
     st.caption(f"Run date **{run_date}** · showing **{len(view)}** of {len(df)} products")
-    display = display.rename(columns={
-        "sku": "Product id",
-        "description": "Description",
-        "supplier": "Supplier",
-        "category": "Category",
-        "lead_time_display": "Lead Time",
-        "baseline_reorder_point": "Baseline (W)",
-        "yoy_difference": "YoY diff (R)",
-        "new_reorder_point": "New Reorder Point (U)",
-    })
-    render_html_table(display, max_height=560)
+    st.dataframe(
+        display, width="stretch", hide_index=True, height=560,
+        column_config={
+            "sku": st.column_config.TextColumn("Product id"),
+            "description": st.column_config.TextColumn("Description", width="large"),
+            "supplier": "Supplier",
+            "category": "Category",
+            "lead_time_display": st.column_config.TextColumn("Lead Time"),
+            "baseline_reorder_point": st.column_config.NumberColumn("Baseline (W)"),
+            "yoy_difference": st.column_config.NumberColumn("YoY diff (R)", format="%.3g"),
+            "new_reorder_point": st.column_config.NumberColumn("New Reorder Point (U)", format="%.3f"),
+        },
+    )
     st.caption("Rows with a word in Lead Time (Static / Sales Velocity) intentionally show no reorder point.")
 
 
@@ -342,84 +287,35 @@ def page_export(c):
 
 def page_startfresh(c):
     st.subheader("Start fresh — load a new master dataset")
-    st.warning(
-        "⚠️ This **replaces all current data** with a fresh master spreadsheet "
-        "(same column layout as your original). Any weekly imports since the last "
-        "load are cleared. Use it to re-base the tool on a newer dataset — e.g. "
-        "start over with June 2026 data."
-    )
-    up = st.file_uploader("Master spreadsheet (.xlsx — same layout as your original)", type=["xlsx"])
-    if up is None:
-        return
 
-    import io
-    import openpyxl
-    import load
-    try:
-        wb = openpyxl.load_workbook(io.BytesIO(up.getvalue()), read_only=True, data_only=True)
-        sheet = "Sheet1" if "Sheet1" in wb.sheetnames else wb.sheetnames[0]
-        ws = wb[sheet]
-        header = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
-        first_label = header[load.COL_DAILY_START - 1]
-        n_products = sum(1 for r in ws.iter_rows(min_row=2, values_only=True)
-                         if r[load.COL_SKU - 1] not in (None, ""))
-        wb.close()
-    except Exception as e:
-        st.error(f"Couldn't read that as a master spreadsheet (expects the original layout): {e}")
-        return
+    # Show the most recent import diagnostics after Streamlit reruns.
+    result = st.session_state.get("fresh_import_report")
+    if result:
+        st.success("The master dataset import completed.")
 
-    st.write(f"Detected **{n_products}** products. The first daily column (column X) is labelled **{first_label}**.")
-    try:
-        if isinstance(first_label, (_dt.datetime, _dt.date)):
-            first_date = first_label.date() if isinstance(first_label, _dt.datetime) else first_label
-            x_day, x_month = first_date.day, first_date.month
-            guess_year = first_date.year
-        else:
-            label_text = str(first_label).strip().replace(".", "")
-            try:
-                first_date = _dt.datetime.fromisoformat(label_text).date()
-                x_day, x_month, guess_year = first_date.day, first_date.month, first_date.year
-            except ValueError:
-                parts = label_text.split("-")
-                x_day, x_month = int(parts[0]), load._MONTHS[parts[1][:3].lower()]
-                guess_year = _dt.date.today().year - 1
-    except Exception:
-        x_day = x_month = None
-        guess_year = _dt.date.today().year
-    start_year = st.number_input("Year that column X falls in", value=guess_year, step=1, format="%d",
-                                 help="The daily headers carry no year. The daily block then spans ~one year from column X.")
-    if x_month:
-        st.caption(f"→ Column X will be **{_dt.date(int(start_year), x_month, x_day).isoformat()}**, and the block runs ~one year forward from there.")
+        col1, col2, col3, col4 = st.columns(4)
+        col1.metric("Excel rows", result.get("total_rows", 0))
+        col2.metric("Importer reported", result.get("products_reported", 0))
+        col3.metric("Database after import", result.get("count_after_import", 0))
+        col4.metric("Database after calculation", result.get("count_after_calculation", 0))
 
-    if st.checkbox("I understand this overwrites all current data") and st.button("Replace data & rebuild", type="primary"):
-        master_path = os.path.join(db.PROJECT_DIR, "data", "source_workbook.xlsx")
-        with open(master_path, "wb") as fh:
-            fh.write(up.getvalue())
-        with st.spinner("Loading the new dataset and recalculating…"):
-            c.close()
-            rep = load.migrate(master_path, start_year=int(start_year))
-            nc = conn()
-            computed = calc.run_calculation(nc, _dt.date.today().isoformat())
-            anchor = db.get_params(nc)["lead_window_anchor"]
+        col5, col6, col7, col8 = st.columns(4)
+        col5.metric("Unique SKUs", result.get("unique_skus", 0))
+        col6.metric("Duplicate rows", result.get("duplicate_rows", 0))
+        col7.metric("Blank SKU rows", result.get("blank_rows", 0))
+        col8.metric("Calculation results", result.get("result_count", 0))
 
-        st.success(
-            f"Started fresh: loaded **{rep.get('products', 0)}** products; "
-            f"column X = **{anchor}**; recalculated **{computed}** products."
+        st.write(f"Column X anchor: **{result.get('anchor', 'Unknown')}**")
+        st.caption(
+            f"Database path used: `{result.get('database_path', db.DEFAULT_DB_PATH)}` · "
+            f"Calculation function returned: **{result.get('calculated_count', 0)}**"
         )
 
-        st.subheader("Import summary")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Excel rows", rep.get("total_rows", 0))
-        m2.metric("Unique SKUs imported", rep.get("unique_skus", rep.get("products", 0)))
-        m3.metric("Duplicate rows skipped", rep.get("duplicates", 0))
-        m4.metric("Blank SKU rows skipped", rep.get("blank_rows", 0))
-
-        duplicate_skus = rep.get("duplicate_skus", [])
-        if duplicate_skus:
-            st.warning(f"{len(duplicate_skus)} duplicate SKU row(s) were skipped.")
-
+        duplicates = result.get("duplicate_skus", [])
+        if duplicates:
+            st.warning(f"{len(duplicates)} duplicate SKU row(s) were skipped.")
             duplicate_rows = []
-            for item in duplicate_skus:
+            for item in duplicates:
                 if isinstance(item, dict):
                     duplicate_rows.append({
                         "Excel row": item.get("row", ""),
@@ -427,11 +323,166 @@ def page_startfresh(c):
                     })
                 else:
                     duplicate_rows.append({"Excel row": "", "SKU": str(item)})
+            st.dataframe(pd.DataFrame(duplicate_rows), width="stretch", hide_index=True)
 
-            duplicate_df = pd.DataFrame(duplicate_rows).fillna("").astype("string")
-            render_html_table(duplicate_df, max_height=280)
+        if st.button("Clear import report"):
+            st.session_state.pop("fresh_import_report", None)
+            st.rerun()
 
-        st.info("Import completed. Use the sidebar to review the dashboard or run another calculation.")
+        st.divider()
+
+    st.warning(
+        "⚠️ This **replaces all current data** with a fresh master spreadsheet "
+        "(same column layout as your original). Any weekly imports since the last "
+        "load are cleared. Use it to re-base the tool on a newer dataset — e.g. "
+        "start over with June 2026 data."
+    )
+
+    up = st.file_uploader(
+        "Master spreadsheet (.xlsx — same layout as your original)",
+        type=["xlsx"],
+    )
+    if up is None:
+        return
+
+    import io
+    import openpyxl
+    import load
+
+    try:
+        wb = openpyxl.load_workbook(
+            io.BytesIO(up.getvalue()),
+            read_only=True,
+            data_only=True,
+        )
+        sheet = "Sheet1" if "Sheet1" in wb.sheetnames else wb.sheetnames[0]
+        ws = wb[sheet]
+        header = [cell.value for cell in next(ws.iter_rows(min_row=1, max_row=1))]
+        first_label = header[load.COL_DAILY_START - 1]
+        n_products = sum(
+            1
+            for row in ws.iter_rows(min_row=2, values_only=True)
+            if row[load.COL_SKU - 1] is not None
+            and str(row[load.COL_SKU - 1]).strip() != ""
+        )
+        wb.close()
+    except Exception as e:
+        st.error(
+            "Couldn't read that as a master spreadsheet "
+            f"(expects the original layout): {e}"
+        )
+        return
+
+    st.write(
+        f"Detected **{n_products}** product rows. "
+        f"The first daily column (column X) is labelled **{first_label}**."
+    )
+
+    try:
+        if isinstance(first_label, (_dt.datetime, _dt.date)):
+            first_date = (
+                first_label.date()
+                if isinstance(first_label, _dt.datetime)
+                else first_label
+            )
+            x_day, x_month = first_date.day, first_date.month
+            guess_year = first_date.year
+        else:
+            label_text = str(first_label).strip().replace(".", "")
+            try:
+                first_date = _dt.datetime.fromisoformat(label_text).date()
+                x_day, x_month, guess_year = (
+                    first_date.day,
+                    first_date.month,
+                    first_date.year,
+                )
+            except ValueError:
+                parts = label_text.split("-")
+                x_day = int(parts[0])
+                x_month = load._MONTHS[parts[1][:3].lower()]
+                guess_year = _dt.date.today().year - 1
+    except Exception:
+        x_day = x_month = None
+        guess_year = _dt.date.today().year
+
+    start_year = st.number_input(
+        "Year that column X falls in",
+        value=guess_year,
+        step=1,
+        format="%d",
+        help=(
+            "The daily headers carry no year. The daily block then spans "
+            "approximately one year from column X."
+        ),
+    )
+
+    if x_month:
+        st.caption(
+            f"→ Column X will be **{_dt.date(int(start_year), x_month, x_day).isoformat()}**, "
+            "and the block runs approximately one year forward from there."
+        )
+
+    confirmed = st.checkbox("I understand this overwrites all current data")
+    if not confirmed:
+        return
+
+    if not st.button("Replace data & rebuild", type="primary"):
+        return
+
+    master_path = os.path.join(db.PROJECT_DIR, "data", "source_workbook.xlsx")
+    os.makedirs(os.path.dirname(master_path), exist_ok=True)
+
+    try:
+        with open(master_path, "wb") as fh:
+            fh.write(up.getvalue())
+
+        with st.spinner("Loading the new dataset and recalculating…"):
+            c.close()
+
+            rep = load.migrate(master_path, start_year=int(start_year))
+
+            nc = conn()
+            try:
+                count_after_import = nc.execute(
+                    "SELECT COUNT(*) FROM products"
+                ).fetchone()[0]
+
+                run_date = _dt.date.today().isoformat()
+                calculated_count = calc.run_calculation(nc, run_date)
+
+                count_after_calculation = nc.execute(
+                    "SELECT COUNT(*) FROM products"
+                ).fetchone()[0]
+
+                result_count = nc.execute(
+                    "SELECT COUNT(*) FROM reorder_results WHERE run_date = ?",
+                    (run_date,),
+                ).fetchone()[0]
+
+                anchor = db.get_params(nc)["lead_window_anchor"]
+            finally:
+                nc.close()
+
+        st.session_state["fresh_import_report"] = {
+            "total_rows": rep.get("total_rows", n_products),
+            "products_reported": rep.get("products", 0),
+            "unique_skus": rep.get("unique_skus", rep.get("products", 0)),
+            "duplicate_rows": rep.get("duplicates", 0),
+            "blank_rows": rep.get("blank_rows", 0),
+            "duplicate_skus": rep.get("duplicate_skus", []),
+            "count_after_import": count_after_import,
+            "count_after_calculation": count_after_calculation,
+            "calculated_count": calculated_count,
+            "result_count": result_count,
+            "anchor": anchor,
+            "database_path": db.DEFAULT_DB_PATH,
+        }
+
+        st.rerun()
+
+    except Exception as e:
+        st.error("The import or recalculation failed.")
+        st.exception(e)
 
 
 # ---------- shell ----------
@@ -441,7 +492,6 @@ def main():
         return
     c = conn()
     st.sidebar.title("◧ Reorder Calculator")
-    st.sidebar.caption("Build: secrets-fix-2026-07-23")
     if not db_ready(c):
         # Fresh host (e.g. first load on Streamlit Cloud): build the database from
         # the bundled workbook, then run the first calculation.
