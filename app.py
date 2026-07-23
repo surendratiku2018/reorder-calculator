@@ -15,22 +15,6 @@ import datetime as _dt
 import hmac
 import os
 import tempfile
-from pathlib import Path
-
-# Railway/Streamlit compatibility:
-# Create an empty secrets.toml before importing Streamlit. The application
-# uses Railway environment variables and does not require Streamlit secrets,
-# but some Streamlit builds can still display a missing-secrets banner when
-# the secrets store is inspected.
-_PROJECT_DIR = Path(__file__).resolve().parent
-_STREAMLIT_DIR = _PROJECT_DIR / ".streamlit"
-_STREAMLIT_DIR.mkdir(parents=True, exist_ok=True)
-_SECRETS_FILE = _STREAMLIT_DIR / "secrets.toml"
-if not _SECRETS_FILE.exists():
-    _SECRETS_FILE.write_text(
-        "# Intentionally empty. Use Railway environment variables instead.\n",
-        encoding="utf-8",
-    )
 
 import pandas as pd
 import streamlit as st
