@@ -7,10 +7,7 @@ sheet's structure so a full export reproduces its exact layout.
   * comparison_week — D:J ("LWeek Day 1-7", this year) and K:Q ("LYear Day1-7",
                       last year) stored as explicit per-SKU values.
   * daily_usage     — the dated block (column X onward), at real calendar dates.
-                      Column X = 10-Feb-2025; each subsequent column is the next
-                      day (positional — the source's date labels contain
-                      duplicates, and the spreadsheet's OFFSET sums by position).
-  * calc_parameters — safety_factor 1.15 and the anchor (10-Feb-2025).
+  * calc_parameters — safety_factor 1.15 and the detected anchor date.
 
 SKUs are handled as text throughout; no spreadsheet round-trip.
 """
@@ -23,15 +20,18 @@ import db
 
 COL_CREATE_DATE = 1            # A
 COL_CATEGORY, COL_SUPPLIER = 2, 3
-COL_LWEEK = range(4, 11)       # D..J  this year
-COL_LYEAR = range(11, 18)      # K..Q  last year
+COL_LWEEK = range(4, 11)       # D..J this year
+COL_LYEAR = range(11, 18)      # K..Q last year
 COL_SKU, COL_DESC, COL_LEAD = 19, 20, 22
 COL_DAILY_START = 24           # X
-FIRST_ROW = 2
 
-ANCHOR = "2025-02-10"          # column X = 10-Feb-2025
-_MONTHS = {m: i + 1 for i, m in enumerate(
-    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"])}
+_MONTHS = {
+    month: index + 1
+    for index, month in enumerate(
+        ["jan", "feb", "mar", "apr", "may", "jun",
+         "jul", "aug", "sep", "oct", "nov", "dec"]
+    )
+}
 
 
 def _num(value):
@@ -41,63 +41,61 @@ def _num(value):
         return float(value)
     try:
         return float(str(value).strip())
-    except ValueError:
+    except (TypeError, ValueError):
         return None
 
 
 def _parse_lead(value):
-    """(lead_time:int|None, method_word:str|None). A number -> it calculates; a
-    word ('Static','Sales Velocity',…) -> it does not."""
+    """Return ``(lead_time, calc_method)`` for the lead-time cell."""
     if value is None or str(value).strip() == "":
         return None, None
+
     if isinstance(value, (int, float)) and not isinstance(value, bool):
-        n = int(value)
-        return (n, None) if n >= 1 else (None, str(value).strip())
+        number = int(value)
+        return (number, None) if number >= 1 else (None, str(value).strip())
+
     text = str(value).strip()
     try:
-        n = int(float(text))
-        return (n, None) if n >= 1 else (None, text)
+        number = int(float(text))
+        return (number, None) if number >= 1 else (None, text)
     except ValueError:
         return None, text
 
 
 def _create_date(value):
-    if isinstance(value, (_dt.datetime, _dt.date)):
-        return value.date().isoformat() if isinstance(value, _dt.datetime) else value.isoformat()
+    if isinstance(value, _dt.datetime):
+        return value.date().isoformat()
+    if isinstance(value, _dt.date):
+        return value.isoformat()
     return None if value is None else str(value).strip()
 
 
 def _block_dates(labels, start_year=2025):
     """Return ISO dates for the daily-usage headers.
 
-    Supports both layouts used by the master workbooks:
-      * real Excel dates/datetimes (for example 2025-07-01), and
-      * legacy text labels without a year (for example 10-Feb).
-
-    For text-only labels, ``start_year`` is used for the first date and the year
-    advances when the month wraps from December to January.
+    Supports both real Excel dates/datetimes and legacy labels such as
+    ``10-Feb``. For legacy labels, ``start_year`` is used initially and the
+    year advances when the month wraps from December to January.
     """
-    dates, year, prev = [], int(start_year), None
-    for h in labels:
-        if h is None or str(h).strip() == "":
+    dates = []
+    year = int(start_year)
+    previous_month = None
+
+    for header in labels:
+        if header is None or str(header).strip() == "":
             dates.append(None)
             continue
 
-        # Newer master files store actual Excel dates in the header.  The old
-        # implementation converted these to strings and tried to parse them as
-        # "DD-Mon", so every daily date became None and recalculation used zero
-        # usage.  Preserve the real date directly.
-        if isinstance(h, (_dt.datetime, _dt.date)):
-            d = h.date() if isinstance(h, _dt.datetime) else h
-            dates.append(d.isoformat())
-            prev = d.month
-            year = d.year
+        if isinstance(header, (_dt.datetime, _dt.date)):
+            value = header.date() if isinstance(header, _dt.datetime) else header
+            dates.append(value.isoformat())
+            previous_month = value.month
+            year = value.year
             continue
 
-        text = str(h).strip().replace(".", "")
+        text = str(header).strip().replace(".", "")
         parsed = None
 
-        # ISO/date-like text exported by some spreadsheet tools.
         try:
             parsed = _dt.datetime.fromisoformat(text).date()
         except ValueError:
@@ -105,104 +103,213 @@ def _block_dates(labels, start_year=2025):
                 parsed = _dt.date.fromisoformat(text)
             except ValueError:
                 parsed = None
+
         if parsed is not None:
             dates.append(parsed.isoformat())
-            prev = parsed.month
+            previous_month = parsed.month
             year = parsed.year
             continue
 
-        # Legacy "10-Feb" header with no year.
         parts = text.split("-")
         try:
-            day, month = int(parts[0]), _MONTHS[parts[1][:3].lower()]
+            day = int(parts[0])
+            month = _MONTHS[parts[1][:3].lower()]
         except (ValueError, KeyError, IndexError):
             dates.append(None)
             continue
-        if prev is not None and month < prev:
+
+        if previous_month is not None and month < previous_month:
             year += 1
-        prev = month
+
+        previous_month = month
         dates.append(_dt.date(year, month, day).isoformat())
+
     return dates
 
 
 def migrate(xlsx_path, db_path=db.DEFAULT_DB_PATH, sheet="Sheet1", start_year=2025):
-    """Load a master spreadsheet into a fresh database. ``start_year`` is the year
-    that column X (the first daily-usage column) falls in; the anchor — the real
-    date of column X — is then derived from that column's label. This lets
-    "Start fresh" load a newer dataset (e.g. a June-2026 master) with correct
-    dates without hard-coding anything."""
+    """Load a master spreadsheet into a fresh database.
+
+    Returns an import report containing counts for products, blank SKU rows,
+    duplicate SKU rows, suppliers, comparison rows, and daily usage rows.
+    """
     wb = openpyxl.load_workbook(xlsx_path, data_only=True, read_only=True)
-    ws = wb[sheet]
-    rows = list(ws.iter_rows(min_row=1, max_row=ws.max_row, values_only=True))
-    block_dates = _block_dates(rows[0][COL_DAILY_START - 1:], start_year)
-    anchor_iso = next((d for d in block_dates if d), f"{start_year}-01-01")  # column X date
+    conn = None
 
-    report = {"products": 0, "suppliers": 0, "daily_rows": 0, "comparison_rows": 0,
-              "calc_methods": {}, "duplicate_skus": []}
+    try:
+        if sheet not in wb.sheetnames:
+            raise ValueError(f"Worksheet '{sheet}' was not found in the workbook.")
 
-    conn = db.connect(db_path)
-    db.reset_db(conn)
+        ws = wb[sheet]
+        rows = list(ws.iter_rows(values_only=True))
 
-    supplier_ids, seen = {}, set()
-    products, comp_rows = [], []
-    daily_agg = {}   # (sku, iso_date) -> summed qty (duplicate date labels collapse here)
+        if not rows:
+            raise ValueError("The uploaded workbook is empty.")
 
-    for row in rows[1:]:
-        sku = row[COL_SKU - 1]
-        if sku is None or str(sku).strip() == "":
-            continue
-        sku = str(sku).strip()
-       if sku in seen:
-        print(f"Duplicate SKU skipped: {sku}")
-        report["duplicate_skus"].append(sku)
-        continue
+        header = rows[0]
+        if len(header) < COL_SKU:
+            raise ValueError(
+                f"The workbook does not contain the required SKU column "
+                f"(column {COL_SKU})."
+            )
 
-      seen.add(sku)
+        block_dates = _block_dates(header[COL_DAILY_START - 1:], start_year)
+        anchor_iso = next(
+            (date_value for date_value in block_dates if date_value),
+            f"{start_year}-01-01",
+        )
 
-        supplier_raw = row[COL_SUPPLIER - 1]
-        supplier_id = None
-        if supplier_raw not in (None, "", 0, "0"):
-            name = str(supplier_raw).strip()
-            if name:
-                if name not in supplier_ids:
-                    cur = conn.execute("INSERT INTO suppliers(name) VALUES (?)", (name,))
-                    supplier_ids[name] = cur.lastrowid
-                supplier_id = supplier_ids[name]
+        report = {
+            "products": 0,
+            "suppliers": 0,
+            "daily_rows": 0,
+            "comparison_rows": 0,
+            "calc_methods": {},
+            "duplicate_skus": [],
+            "total_rows": 0,
+            "unique_skus": 0,
+            "duplicates": 0,
+            "blank_rows": 0,
+        }
 
-        category = row[COL_CATEGORY - 1]
-        category = str(category).strip() if category is not None else None
-        lead_time, calc_method = _parse_lead(row[COL_LEAD - 1])
-        report["calc_methods"][calc_method] = report["calc_methods"].get(calc_method, 0) + 1
-        desc = row[COL_DESC - 1]
+        conn = db.connect(db_path)
+        db.reset_db(conn)
 
-        products.append((sku, _create_date(row[COL_CREATE_DATE - 1]),
-                         (str(desc).strip() if desc is not None else None),
-                         category, lead_time, calc_method, supplier_id))
+        supplier_ids = {}
+        seen = set()
+        products = []
+        comparison_rows = []
+        daily_agg = {}
 
-        comp_rows.append((sku,
-                          [_num(row[c - 1]) for c in COL_LWEEK],
-                          [_num(row[c - 1]) for c in COL_LYEAR]))
+        total_excel_rows = 0
+        blank_sku_rows = 0
+        duplicate_rows = 0
 
-        for idx, cell in enumerate(row[COL_DAILY_START - 1:]):
-            qty = _num(cell)
-            if qty not in (None, 0.0) and idx < len(block_dates) and block_dates[idx]:
-                key = (sku, block_dates[idx])
-                daily_agg[key] = daily_agg.get(key, 0.0) + qty   # sum duplicate-date labels
+        for excel_row_number, row in enumerate(rows[1:], start=2):
+            total_excel_rows += 1
 
-    conn.executemany(
-        "INSERT INTO products(sku, create_date, description, category, lead_time, calc_method, supplier_id) "
-        "VALUES (?,?,?,?,?,?,?)", products)
-    for sku, lweek, lyear in comp_rows:
-        db.set_comparison_week(conn, sku, lweek, lyear)
-    conn.executemany("INSERT INTO daily_usage(sku, usage_date, qty) VALUES (?,?,?)",
-                     [(s, d, q) for (s, d), q in daily_agg.items()])
-    db.set_params(conn, 1.15, anchor_iso)
-    conn.commit()
+            sku_value = row[COL_SKU - 1] if len(row) >= COL_SKU else None
+            if sku_value is None or str(sku_value).strip() == "":
+                blank_sku_rows += 1
+                continue
 
-    report["products"] = len(products)
-    report["suppliers"] = len(supplier_ids)
-    report["daily_rows"] = len(daily_agg)
-    report["comparison_rows"] = len(comp_rows)
-    conn.close()
-    wb.close()
-    return report
+            sku = str(sku_value).strip()
+
+            if sku in seen:
+                duplicate_rows += 1
+                report["duplicate_skus"].append(
+                    {"row": excel_row_number, "sku": sku}
+                )
+                continue
+
+            seen.add(sku)
+
+            supplier_raw = row[COL_SUPPLIER - 1] if len(row) >= COL_SUPPLIER else None
+            supplier_id = None
+            if supplier_raw not in (None, "", 0, "0"):
+                supplier_name = str(supplier_raw).strip()
+                if supplier_name:
+                    if supplier_name not in supplier_ids:
+                        cursor = conn.execute(
+                            "INSERT INTO suppliers(name) VALUES (?)",
+                            (supplier_name,),
+                        )
+                        supplier_ids[supplier_name] = cursor.lastrowid
+                    supplier_id = supplier_ids[supplier_name]
+
+            category_value = row[COL_CATEGORY - 1] if len(row) >= COL_CATEGORY else None
+            category = (
+                str(category_value).strip()
+                if category_value is not None
+                else None
+            )
+
+            lead_value = row[COL_LEAD - 1] if len(row) >= COL_LEAD else None
+            lead_time, calc_method = _parse_lead(lead_value)
+            report["calc_methods"][calc_method] = (
+                report["calc_methods"].get(calc_method, 0) + 1
+            )
+
+            description_value = row[COL_DESC - 1] if len(row) >= COL_DESC else None
+            create_date_value = (
+                row[COL_CREATE_DATE - 1]
+                if len(row) >= COL_CREATE_DATE
+                else None
+            )
+
+            products.append(
+                (
+                    sku,
+                    _create_date(create_date_value),
+                    str(description_value).strip()
+                    if description_value is not None
+                    else None,
+                    category,
+                    lead_time,
+                    calc_method,
+                    supplier_id,
+                )
+            )
+
+            comparison_rows.append(
+                (
+                    sku,
+                    [
+                        _num(row[column - 1]) if len(row) >= column else None
+                        for column in COL_LWEEK
+                    ],
+                    [
+                        _num(row[column - 1]) if len(row) >= column else None
+                        for column in COL_LYEAR
+                    ],
+                )
+            )
+
+            if len(row) >= COL_DAILY_START:
+                for index, cell in enumerate(row[COL_DAILY_START - 1:]):
+                    quantity = _num(cell)
+                    if (
+                        quantity not in (None, 0.0)
+                        and index < len(block_dates)
+                        and block_dates[index]
+                    ):
+                        key = (sku, block_dates[index])
+                        daily_agg[key] = daily_agg.get(key, 0.0) + quantity
+
+        conn.executemany(
+            "INSERT INTO products(" 
+            "sku, create_date, description, category, lead_time, calc_method, supplier_id"
+            ") VALUES (?,?,?,?,?,?,?)",
+            products,
+        )
+
+        for sku, last_week, last_year in comparison_rows:
+            db.set_comparison_week(conn, sku, last_week, last_year)
+
+        conn.executemany(
+            "INSERT INTO daily_usage(sku, usage_date, qty) VALUES (?,?,?)",
+            [(sku, usage_date, qty) for (sku, usage_date), qty in daily_agg.items()],
+        )
+
+        db.set_params(conn, 1.15, anchor_iso)
+        conn.commit()
+
+        report["products"] = len(products)
+        report["suppliers"] = len(supplier_ids)
+        report["daily_rows"] = len(daily_agg)
+        report["comparison_rows"] = len(comparison_rows)
+        report["total_rows"] = total_excel_rows
+        report["unique_skus"] = len(seen)
+        report["duplicates"] = duplicate_rows
+        report["blank_rows"] = blank_sku_rows
+
+        return report
+
+    except Exception:
+        if conn is not None:
+            conn.rollback()
+        raise
+    finally:
+        if conn is not None:
+            conn.close()
+        wb.close()
