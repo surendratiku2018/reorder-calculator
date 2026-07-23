@@ -131,7 +131,7 @@ def page_dashboard(c):
                     "baseline_reorder_point", "yoy_difference", "new_reorder_point"]]
     st.caption(f"Run date **{run_date}** · showing **{len(view)}** of {len(df)} products")
     st.dataframe(
-        display, width="stretch", hide_index=True, height=560,
+        display, use_container_width=True, hide_index=True, height=560,
         column_config={
             "sku": st.column_config.TextColumn("Product id"),
             "description": st.column_config.TextColumn("Description", width="large"),
@@ -374,7 +374,7 @@ def page_startfresh(c):
 
             st.dataframe(
                 pd.DataFrame(duplicate_rows),
-                width="stretch",
+                use_container_width=True,
                 hide_index=True,
             )
 
