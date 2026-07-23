@@ -23,7 +23,7 @@ pytest -q        →  7 passed
   `24` was a hand-typed value over a broken (`#REF!`) formula, so the rebuilt
   tool computes it normally — there is no override mechanism.
 * Beyond the 12 pairs, the engine also reproduces the spreadsheet's own cached
-  `W`/`R`/`U` for **all 679 products** (the only difference is `16-2400`, the
+  `W`/`R`/`U` for **all 705 products** (the only difference is `16-2400`, the
   intentional divergence above).
 
 ---
@@ -114,7 +114,7 @@ See [SPEC.md](SPEC.md) §4–§5 for the full schema and procedure.
 
 * **Finale export columns** — the subset currently exports `ProductID` +
   `ReorderPoint`; confirm the exact column names/order Finale expects.
-* **`products_all_679.csv`** — the spec references this cleaned products/suppliers
+* **`products_all_705.csv`** — the spec references this cleaned products/suppliers
   file. This build derives products/suppliers directly from the workbook (679
   products, 116 suppliers); supply the CSV to use it as the canonical source.
 * **Comparison-week dates** — seeded to reproduce the current sheet; the Run
