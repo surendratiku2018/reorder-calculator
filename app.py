@@ -15,6 +15,22 @@ import datetime as _dt
 import hmac
 import os
 import tempfile
+from pathlib import Path
+
+# Railway/Streamlit compatibility:
+# Create an empty secrets.toml before importing Streamlit. The application
+# uses Railway environment variables and does not require Streamlit secrets,
+# but some Streamlit builds can still display a missing-secrets banner when
+# the secrets store is inspected.
+_PROJECT_DIR = Path(__file__).resolve().parent
+_STREAMLIT_DIR = _PROJECT_DIR / ".streamlit"
+_STREAMLIT_DIR.mkdir(parents=True, exist_ok=True)
+_SECRETS_FILE = _STREAMLIT_DIR / "secrets.toml"
+if not _SECRETS_FILE.exists():
+    _SECRETS_FILE.write_text(
+        "# Intentionally empty. Use Railway environment variables instead.\n",
+        encoding="utf-8",
+    )
 
 import pandas as pd
 import streamlit as st
@@ -31,9 +47,8 @@ st.set_page_config(page_title="Reorder Calculator", page_icon="◧", layout="wid
 def _expected_password() -> str:
     """Read the optional password from the Railway environment only.
 
-    Accessing ``st.secrets`` when no secrets.toml exists causes Streamlit to
-    display a red warning banner even when the exception is caught. Railway
-    environment variables are the correct source for this deployment.
+    Railway environment variables are used for the optional password,
+    so no local secrets file is required.
     """
     return os.environ.get("APP_PASSWORD", "").strip()
 
@@ -97,6 +112,52 @@ def dashboard_rows(c, run_date):
     return out
 
 
+# ---------- safe table rendering ----------
+
+def render_html_table(frame: pd.DataFrame, max_height: int = 560) -> None:
+    """Render a DataFrame without Streamlit/PyArrow conversion.
+
+    Railway was repeatedly crashing inside pyarrow while st.dataframe()
+    converted mixed Pandas columns. HTML rendering avoids that native-code
+    conversion completely while preserving the existing search/filter logic.
+    """
+    safe = frame.copy()
+    safe = safe.where(pd.notna(safe), "")
+    table_html = safe.to_html(index=False, escape=True, border=0, classes="safe-data-table")
+    st.markdown(
+        f"""
+        <style>
+        .safe-table-wrap {{
+            max-height: {int(max_height)}px;
+            overflow: auto;
+            border: 1px solid rgba(49, 51, 63, 0.2);
+            border-radius: 0.5rem;
+        }}
+        table.safe-data-table {{
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.9rem;
+        }}
+        table.safe-data-table th,
+        table.safe-data-table td {{
+            padding: 0.45rem 0.6rem;
+            border-bottom: 1px solid rgba(49, 51, 63, 0.12);
+            text-align: left;
+            white-space: nowrap;
+        }}
+        table.safe-data-table th {{
+            position: sticky;
+            top: 0;
+            background: var(--background-color, white);
+            z-index: 1;
+        }}
+        </style>
+        <div class="safe-table-wrap">{table_html}</div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 # ---------- pages ----------
 
 def page_dashboard(c):
@@ -143,19 +204,17 @@ def page_dashboard(c):
         display[column] = pd.to_numeric(display[column], errors="coerce").astype("float64")
 
     st.caption(f"Run date **{run_date}** · showing **{len(view)}** of {len(df)} products")
-    st.dataframe(
-        display, use_container_width=True, hide_index=True, height=560,
-        column_config={
-            "sku": st.column_config.TextColumn("Product id"),
-            "description": st.column_config.TextColumn("Description", width="large"),
-            "supplier": "Supplier",
-            "category": "Category",
-            "lead_time_display": st.column_config.TextColumn("Lead Time"),
-            "baseline_reorder_point": st.column_config.NumberColumn("Baseline (W)"),
-            "yoy_difference": st.column_config.NumberColumn("YoY diff (R)", format="%.3g"),
-            "new_reorder_point": st.column_config.NumberColumn("New Reorder Point (U)", format="%.3f"),
-        },
-    )
+    display = display.rename(columns={
+        "sku": "Product id",
+        "description": "Description",
+        "supplier": "Supplier",
+        "category": "Category",
+        "lead_time_display": "Lead Time",
+        "baseline_reorder_point": "Baseline (W)",
+        "yoy_difference": "YoY diff (R)",
+        "new_reorder_point": "New Reorder Point (U)",
+    })
+    render_html_table(display, max_height=560)
     st.caption("Rows with a word in Lead Time (Static / Sales Velocity) intentionally show no reorder point.")
 
 
@@ -386,11 +445,7 @@ def page_startfresh(c):
                     duplicate_rows.append({"Excel row": "", "SKU": str(item)})
 
             duplicate_df = pd.DataFrame(duplicate_rows).fillna("").astype("string")
-            st.dataframe(
-                duplicate_df,
-                use_container_width=True,
-                hide_index=True,
-            )
+            render_html_table(duplicate_df, max_height=280)
 
         st.info("Import completed. Use the sidebar to review the dashboard or run another calculation.")
 
@@ -402,6 +457,7 @@ def main():
         return
     c = conn()
     st.sidebar.title("◧ Reorder Calculator")
+    st.sidebar.caption("Build: secrets-fix-2026-07-23")
     if not db_ready(c):
         # Fresh host (e.g. first load on Streamlit Cloud): build the database from
         # the bundled workbook, then run the first calculation.
