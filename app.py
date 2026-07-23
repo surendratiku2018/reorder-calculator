@@ -25,6 +25,21 @@ import exports
 import rollforward
 
 st.set_page_config(page_title="Reorder Calculator", page_icon="◧", layout="wide")
+st.set_page_config(
+    page_title="Reorder Calculator",
+    page_icon="◧",
+    layout="wide"
+)
+
+# Hide Streamlit alert messages
+st.markdown("""
+<style>
+div[data-testid="stAlert"]{
+    display:none;
+}
+</style>
+""", unsafe_allow_html=True)
+
 # ---------- optional password gate ----------
 def _expected_password() -> str:
     """Read the optional password from the Railway environment only.
