@@ -152,10 +152,12 @@ def migrate(xlsx_path, db_path=db.DEFAULT_DB_PATH, sheet="Sheet1", start_year=20
         if sku is None or str(sku).strip() == "":
             continue
         sku = str(sku).strip()
-        if sku in seen:
-            report["duplicate_skus"].append(sku)
-            continue
-        seen.add(sku)
+       if sku in seen:
+        print(f"Duplicate SKU skipped: {sku}")
+        report["duplicate_skus"].append(sku)
+        continue
+
+      seen.add(sku)
 
         supplier_raw = row[COL_SUPPLIER - 1]
         supplier_id = None
