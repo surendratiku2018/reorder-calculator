@@ -29,11 +29,13 @@ st.set_page_config(page_title="Reorder Calculator", page_icon="◧", layout="wid
 
 # ---------- optional password gate ----------
 def _expected_password() -> str:
-    try:
-        pw = st.secrets.get("app_password", "")
-    except Exception:
-        pw = ""
-    return pw or os.environ.get("APP_PASSWORD", "")
+    """Read the optional password from the Railway environment only.
+
+    Accessing ``st.secrets`` when no secrets.toml exists causes Streamlit to
+    display a red warning banner even when the exception is caught. Railway
+    environment variables are the correct source for this deployment.
+    """
+    return os.environ.get("APP_PASSWORD", "").strip()
 
 
 def check_password() -> bool:
@@ -128,7 +130,18 @@ def page_dashboard(c):
         view = view[view["calculates"]]
 
     display = view[["sku", "description", "supplier", "category", "lead_time_display",
-                    "baseline_reorder_point", "yoy_difference", "new_reorder_point"]]
+                    "baseline_reorder_point", "yoy_difference", "new_reorder_point"]].copy()
+
+    # Give Arrow a stable schema. SQLite/Pandas can otherwise leave object
+    # columns containing a mixture of None, strings, ints and floats. Some
+    # PyArrow builds can crash while inferring those mixed object columns.
+    text_columns = ["sku", "description", "supplier", "category", "lead_time_display"]
+    number_columns = ["baseline_reorder_point", "yoy_difference", "new_reorder_point"]
+    for column in text_columns:
+        display[column] = display[column].fillna("").astype("string")
+    for column in number_columns:
+        display[column] = pd.to_numeric(display[column], errors="coerce").astype("float64")
+
     st.caption(f"Run date **{run_date}** · showing **{len(view)}** of {len(df)} products")
     st.dataframe(
         display, use_container_width=True, hide_index=True, height=560,
@@ -372,8 +385,9 @@ def page_startfresh(c):
                 else:
                     duplicate_rows.append({"Excel row": "", "SKU": str(item)})
 
+            duplicate_df = pd.DataFrame(duplicate_rows).fillna("").astype("string")
             st.dataframe(
-                pd.DataFrame(duplicate_rows),
+                duplicate_df,
                 use_container_width=True,
                 hide_index=True,
             )
